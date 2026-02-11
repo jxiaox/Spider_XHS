@@ -4,6 +4,7 @@ import re
 import time
 import openpyxl
 import requests
+import multiprocessing
 from loguru import logger
 from retry import retry
 
@@ -92,8 +93,15 @@ def handle_note_info(data):
         except:
             pass
     if note_type == '视频':
-        video_cover = image_list[0]
-        video_addr = 'https://sns-video-bd.xhscdn.com/' + data['note_card']['video']['consumer']['origin_video_key']
+        try:
+            video_cover = image_list[0] if image_list else None
+            # Safe access to video key
+            video_key = data['note_card']['video']['consumer']['origin_video_key']
+            video_addr = 'https://sns-video-bd.xhscdn.com/' + video_key
+        except Exception as e:
+            logger.warning(f"Failed to extract video address: {e}")
+            video_cover = None
+            video_addr = None
         # success, msg, video_addr = XHS_Apis.get_note_no_water_video(note_id)
     else:
         video_cover = None
@@ -176,34 +184,43 @@ def handle_comment_info(data):
         'pictures': pictures,
     }
 def save_to_xlsx(datas, file_path, type='note'):
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    if type == 'note':
-        headers = ['笔记id', '笔记url', '笔记类型', '用户id', '用户主页url', '昵称', '头像url', '标题', '描述', '点赞数量', '收藏数量', '评论数量', '分享数量', '视频封面url', '视频地址url', '图片地址url列表', '标签', '上传时间', 'ip归属地']
-    elif type == 'user':
-        headers = ['用户id', '用户主页url', '用户名', '头像url', '小红书号', '性别', 'ip地址', '介绍', '关注数量', '粉丝数量', '作品被赞和收藏数量', '标签']
+    if os.path.exists(file_path):
+        wb = openpyxl.load_workbook(file_path)
+        ws = wb.active
     else:
-        headers = ['笔记id', '笔记url', '评论id', '用户id', '用户主页url', '昵称', '头像url', '评论内容', '评论标签', '点赞数量', '上传时间', 'ip归属地', '图片地址url列表']
-    ws.append(headers)
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        if type == 'note':
+            headers = ['笔记id', '笔记url', '笔记类型', '用户id', '用户主页url', '昵称', '头像url', '标题', '描述', '点赞数量', '收藏数量', '评论数量', '分享数量', '视频封面url', '视频地址url', '图片地址url列表', '标签', '上传时间', 'ip归属地']
+        elif type == 'user':
+            headers = ['用户id', '用户主页url', '用户名', '头像url', '小红书号', '性别', 'ip地址', '介绍', '关注数量', '粉丝数量', '作品被赞和收藏数量', '标签']
+        else:
+            headers = ['笔记id', '笔记url', '评论id', '用户id', '用户主页url', '昵称', '头像url', '评论内容', '评论标签', '点赞数量', '上传时间', 'ip归属地', '图片地址url列表']
+        ws.append(headers)
+    
     for data in datas:
         data = {k: norm_text(str(v)) for k, v in data.items()}
         ws.append(list(data.values()))
     wb.save(file_path)
-    logger.info(f'数据保存至 {file_path}')
+    wb.save(file_path)
+    logger.info(f'数据保存(追加)至 {file_path}')
 
-def download_media(path, name, url, type):
-    if type == 'image':
-        content = requests.get(url).content
-        with open(path + '/' + name + '.jpg', mode="wb") as f:
-            f.write(content)
-    elif type == 'video':
-        res = requests.get(url, stream=True)
-        size = 0
-        chunk_size = 1024 * 1024
-        with open(path + '/' + name + '.mp4', mode="wb") as f:
-            for data in res.iter_content(chunk_size=chunk_size):
-                f.write(data)
-                size += len(data)
+def get_scraped_note_ids(file_path):
+    if not os.path.exists(file_path):
+        return set()
+    try:
+        wb = openpyxl.load_workbook(file_path)
+        ws = wb.active
+        ids = set()
+        # Iterate from row 2, column 1 (assuming it's '笔记id')
+        for row in ws.iter_rows(min_row=2, max_col=1, values_only=True):
+            if row[0]:
+                ids.add(str(row[0]))
+        return ids
+    except Exception as e:
+        logger.error(f"Error reading existing excel {file_path}: {e}")
+        return set()
+
 
 def save_user_detail(user, path):
     with open(f'{path}/detail.txt', mode="w", encoding="utf-8") as f:
@@ -243,8 +260,36 @@ def save_note_detail(note, path):
         f.write(f"标签: {note['tags']}\n")
         f.write(f"上传时间: {note['upload_time']}\n")
         f.write(f"ip归属地: {note['ip_location']}\n")
+        f.write(f"图片文字: {note.get('ocr_content', '无')}\n")
 
 
+
+# Initialize OCR (Global to avoid reloading)
+OCR_ENGINE = None
+try:
+    from paddleocr import PaddleOCR
+    # Suppress heavy logging
+    import logging
+    logging.getLogger("ppocr").setLevel(logging.ERROR)
+    OCR_ENGINE = PaddleOCR(use_angle_cls=True, lang="ch")
+    logger.info("PaddleOCR initialized successfully.")
+except ImportError:
+    logger.warning("PaddleOCR not found. OCR features disabled.")
+except Exception as e:
+    logger.warning(f"Failed to init OCR: {e}")
+
+def ocr_worker(img_path, result_queue):
+    """Worker function for OCR to be run in a separate process."""
+    try:
+        # Re-init OCR in worker process to avoid issues on some platforms
+        from paddleocr import PaddleOCR
+        import logging
+        logging.getLogger("ppocr").setLevel(logging.ERROR)
+        worker_ocr = PaddleOCR(use_angle_cls=True, lang="ch")
+        res = worker_ocr.ocr(img_path)
+        result_queue.put(res)
+    except Exception as e:
+        result_queue.put(e)
 
 @retry(tries=3, delay=1)
 def download_note(note_info, path, save_choice):
@@ -258,17 +303,107 @@ def download_note(note_info, path, save_choice):
         title = f'无标题'
     save_path = f'{path}/{nickname}_{user_id}/{title}_{note_id}'
     check_and_create_path(save_path)
-    with open(f'{save_path}/info.json', mode='w', encoding='utf-8') as f:
-        f.write(json.dumps(note_info) + '\n')
+    
     note_type = note_info['note_type']
-    save_note_detail(note_info, save_path)
+    ocr_results = []
+
+    # 1. Save Initial Metadata (Ensures persistence even if next steps hang)
+    if 'ocr_content' not in note_info:
+        note_info['ocr_content'] = "无"
+    
+    try:
+        with open(f'{save_path}/info.json', mode='w', encoding='utf-8') as f:
+            f.write(json.dumps(note_info, ensure_ascii=False) + '\n')
+        save_note_detail(note_info, save_path)
+    except Exception as e:
+        logger.error(f"Failed to save initial detail for {note_id}: {e}")
+
+    # 2. Download Media
     if note_type == '图集' and save_choice in ['media', 'media-image', 'all']:
         for img_index, img_url in enumerate(note_info['image_list']):
-            download_media(save_path, f'image_{img_index}', img_url, 'image')
+            img_name = f'image_{img_index}'
+            download_media(save_path, img_name, img_url, 'image')
+            
+            # OCR Logic with Timeout
+            if OCR_ENGINE:
+                try:
+                    img_full_path = os.path.join(save_path, f'{img_name}.jpg')
+                    if os.path.exists(img_full_path):
+                        # Use multiprocessing for OCR with timeout
+                        result_queue = multiprocessing.Queue()
+                        p = multiprocessing.Process(target=ocr_worker, args=(img_full_path, result_queue))
+                        p.start()
+                        p.join(timeout=30) # 30s timeout
+                        
+                        if p.is_alive():
+                            logger.warning(f"OCR timed out for {img_name}")
+                            p.terminate()
+                            p.join(timeout=5)
+                            if p.is_alive():
+                                logger.warning(f"OCR worker still alive after terminate, killing it for {img_name}")
+                                p.kill()
+                                p.join()
+                            content = "OCR超时"
+                        else:
+                            res = result_queue.get() if not result_queue.empty() else None
+                            if isinstance(res, Exception):
+                                logger.warning(f"OCR worker error for {img_name}: {res}")
+                                content = "OCR失败"
+                            elif res and res[0]:
+                                text_lines = []
+                                for line in res[0]:
+                                    if line and len(line) >= 2:
+                                        text_lines.append(line[1][0])
+                                content = ", ".join(text_lines) if text_lines else "无"
+                            else:
+                                content = "无"
+                        
+                        ocr_results.append(f"图{img_index+1}: {content}")
+                except Exception as e:
+                    logger.warning(f"OCR wrapper failed for {img_name}: {e}")
+
     elif note_type == '视频' and save_choice in ['media', 'media-video', 'all']:
-        download_media(save_path, 'cover', note_info['video_cover'], 'image')
-        download_media(save_path, 'video', note_info['video_addr'], 'video')
+        try:
+            if note_info.get('video_cover'):
+                download_media(save_path, 'cover', note_info['video_cover'], 'image')
+            if note_info.get('video_addr'):
+                download_media(save_path, 'video', note_info['video_addr'], 'video')
+            else:
+                logger.warning(f"Video address is None for {note_id}, skipping video download.")
+        except Exception as e:
+            logger.error(f"Failed to download video media: {e}")
+
+    # 3. Update Metadata with OCR Content
+    if ocr_results:
+        note_info['ocr_content'] = " | ".join(ocr_results)
+        try:
+            with open(f'{save_path}/info.json', mode='w', encoding='utf-8') as f:
+                f.write(json.dumps(note_info, ensure_ascii=False) + '\n')
+            save_note_detail(note_info, save_path)
+        except Exception as e:
+            logger.error(f"Failed to update detail for {note_id}: {e}")
+    
     return save_path
+
+def download_media(path, name, url, type):
+    if not url:
+        logger.warning(f"Skipping download for {name}, URL is empty.")
+        return
+    try:
+        if type == 'image':
+            content = requests.get(url, timeout=10).content
+            with open(path + '/' + name + '.jpg', mode="wb") as f:
+                f.write(content)
+        elif type == 'video':
+            res = requests.get(url, stream=True, timeout=20)
+            size = 0
+            chunk_size = 1024 * 1024
+            with open(path + '/' + name + '.mp4', mode="wb") as f:
+                for data in res.iter_content(chunk_size=chunk_size):
+                    f.write(data)
+                    size += len(data)
+    except Exception as e:
+        logger.warning(f"Media download failed for {name}: {e}")
 
 
 def check_and_create_path(path):

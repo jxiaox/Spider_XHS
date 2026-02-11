@@ -3,16 +3,55 @@ import math
 import random
 import execjs
 from xhs_utils.cookie_util import trans_cookies
+import urllib.parse
+
+import os
+
+# Calculate absolute path to static directory relative to this file
+current_dir = os.path.dirname(os.path.abspath(__file__))
+# Assumes xhs_util.py is in xhs_utils/, and static/ is a sibling of xhs_utils/
+# i.e. project_root/xhs_utils/xhs_util.py -> project_root/static/
+static_dir = os.path.join(os.path.dirname(current_dir), 'static')
 
 try:
-    js = execjs.compile(open(r'../static/xhs_xs_xsc_56.js', 'r', encoding='utf-8').read())
-except:
-    js = execjs.compile(open(r'static/xhs_xs_xsc_56.js', 'r', encoding='utf-8').read())
+    js_path = os.path.join(static_dir, 'xhs_xs_xsc_56.js')
+    js = execjs.compile(open(js_path, 'r', encoding='utf-8').read())
+except Exception as e:
+    # Fallback or re-raise with clear message
+    print(f"Error loading {js_path}: {e}")
+    # Try local static directory if exists (e.g. if structure is flat)
+    try:
+        js = execjs.compile(open('static/xhs_xs_xsc_56.js', 'r', encoding='utf-8').read())
+    except:
+        raise e
+
+
 
 try:
-    xray_js = execjs.compile(open(r'../static/xhs_xray.js', 'r', encoding='utf-8').read())
-except:
-    xray_js = execjs.compile(open(r'static/xhs_xray.js', 'r', encoding='utf-8').read())
+    xray_path = os.path.join(static_dir, 'xhs_xray.js')
+    
+    # Read the JS content
+    with open(xray_path, 'r', encoding='utf-8') as f:
+        xray_content = f.read()
+
+    # Calculate absolute paths for the packs
+    pack1_path = os.path.join(static_dir, 'xhs_xray_pack1.js')
+    pack2_path = os.path.join(static_dir, 'xhs_xray_pack2.js')
+
+    # Replace relative requires with absolute paths to ensure they work regardless of CWD
+    # We replace the simple relative path which is the first attempt in the try-catch block
+    # Escaping backslashes for Windows compatibility if needed, but here assuming Mac (forward slashes mostly fine in JS strings inside Node on Mac)
+    xray_content = xray_content.replace("'./xhs_xray_pack1.js'", f"'{pack1_path}'")
+    xray_content = xray_content.replace("'./xhs_xray_pack2.js'", f"'{pack2_path}'")
+
+    xray_js = execjs.compile(xray_content)
+
+except Exception as e:
+    # Fallback
+    try:
+        xray_js = execjs.compile(open('static/xhs_xray.js', 'r', encoding='utf-8').read())
+    except:
+        raise e
 
 def generate_x_b3_traceid(len=16):
     x_b3_traceid = ""
@@ -94,10 +133,7 @@ def generate_request_params(cookies_str, api, data='', method='POST'):
     return headers, cookies, data
 
 def splice_str(api, params):
-    url = api + '?'
-    for key, value in params.items():
-        if value is None:
-            value = ''
-        url += key + '=' + value + '&'
-    return url[:-1]
+    params = {k: v if v is not None else '' for k, v in params.items()}
+    query_string = urllib.parse.urlencode(params)
+    return f"{api}?{query_string}"
 

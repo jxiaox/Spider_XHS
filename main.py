@@ -1,14 +1,20 @@
 import json
 import os
+import time
+import random
+import sys
 from loguru import logger
 from apis.xhs_pc_apis import XHS_Apis
 from xhs_utils.common_util import init
-from xhs_utils.data_util import handle_note_info, download_note, save_to_xlsx
+from xhs_utils.data_util import handle_note_info, download_note, save_to_xlsx, get_scraped_note_ids
 
 
 class Data_Spider():
     def __init__(self):
         self.xhs_apis = XHS_Apis()
+        self.stop_id_set = set() # Initialize stop_id_set
+        self.throttle_min = 300
+        self.throttle_max = 310
 
     def spider_note(self, note_url: str, cookies_str: str, proxies=None):
         """
@@ -20,10 +26,40 @@ class Data_Spider():
         note_info = None
         try:
             success, msg, note_info = self.xhs_apis.get_note_info(note_url, cookies_str, proxies)
+            
+            # Fallback to HTML if API fails or empty
+            if not success or (success and ('data' not in note_info or 'items' not in note_info['data'] or len(note_info['data']['items']) == 0)):
+                logger.warning(f"API failed/empty for {note_url}, trying HTML fallback...")
+                try:
+                    import urllib.parse
+                    parsed = urllib.parse.urlparse(note_url)
+                    # path might be /explore/id or /discovery/item/id
+                    path_parts = parsed.path.split('/')
+                    note_id = path_parts[-1]
+                    
+                    f_success, f_msg, f_info = self.xhs_apis.get_note_info_from_html(note_id, note_url, cookies_str, proxies)
+                    if f_success:
+                        success = True
+                        note_info = f_info
+                        msg = "Recovered from HTML"
+                        logger.info(f"HTML Fallback successful for {note_id}")
+                    else:
+                        logger.error(f"HTML Fallback failed: {f_msg}")
+                except Exception as e:
+                    logger.error(f"Fallback exception: {e}")
+
             if success:
-                note_info = note_info['data']['items'][0]
-                note_info['url'] = note_url
-                note_info = handle_note_info(note_info)
+                try:
+                    if 'data' in note_info and 'items' in note_info['data'] and len(note_info['data']['items']) > 0:
+                        note_info = note_info['data']['items'][0]
+                        note_info['url'] = note_url
+                        note_info = handle_note_info(note_info)
+                    else:
+                        success = False
+                        msg = "No items found in response"
+                except Exception as e:
+                    success = False
+                    msg = f"Error parsing items: {e}"
         except Exception as e:
             success = False
             msg = e
@@ -41,16 +77,86 @@ class Data_Spider():
         if (save_choice == 'all' or save_choice == 'excel') and excel_name == '':
             raise ValueError('excel_name 不能为空')
         note_list = []
-        for note_url in notes:
-            success, msg, note_info = self.spider_note(note_url, cookies_str, proxies)
-            if note_info is not None and success:
-                note_list.append(note_info)
-        for note_info in note_list:
-            if save_choice == 'all' or 'media' in save_choice:
-                download_note(note_info, base_path['media'], save_choice)
+        buffer_list = []
+        file_path = ""
         if save_choice == 'all' or save_choice == 'excel':
             file_path = os.path.abspath(os.path.join(base_path['excel'], f'{excel_name}.xlsx'))
-            save_to_xlsx(note_list, file_path)
+        
+        scraped_ids = set()
+        if os.path.exists(file_path):
+             scraped_ids = get_scraped_note_ids(file_path)
+             logger.info(f"Found {len(scraped_ids)} already scraped notes. These will be skipped.")
+
+        total_notes = len(notes)
+        for index, note_url in enumerate(notes, 1):
+            logger.info(f"Progress: [{index}/{total_notes}] Processing note...")
+            # Extract note_id from url
+            note_id = note_url.split('/explore/')[-1].split('?')[0]
+            if note_id in scraped_ids:
+                logger.info(f"Skipping already scraped note: {note_id}")
+                continue
+
+            retries = 3
+            success_overall = False
+            while retries > 0:
+                success, msg, note_info = self.spider_note(note_url, cookies_str, proxies)
+                if success and note_info is not None:
+                    note_list.append(note_info)
+                    buffer_list.append(note_info)
+                    
+                    # Log Title and Time
+                    try:
+                        title = note_info.get('title', 'No Title')
+                        readable_time = note_info.get('upload_time', 'Unknown Time')
+                        logger.info(f"Scraped Note: 【{title}】 Upload Time: {readable_time}")
+                    except Exception as e:
+                        logger.warning(f"Failed to log details: {e}")
+
+                    # Incremental download media
+                    if save_choice == 'all' or 'media' in save_choice:
+                        download_note(note_info, base_path['media'], save_choice)
+                    
+                    # Immediate Save to Excel
+                    if (save_choice == 'all' or save_choice == 'excel'):
+                         save_to_xlsx([note_info], file_path)
+                    
+                    # Record successful scrape
+                    scraped_log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scraped_urls.txt")
+                    with open(scraped_log_path, "a", encoding="utf-8") as f:
+                        f.write(f"{note_url}\n")
+                    
+                    success_overall = True
+                    break # Break from retry loop on success
+                elif "登录已过期" in str(msg):
+                    logger.error(f"Login expired! Scraper stopping. Msg: {msg}")
+                    sys.exit(1)
+                elif "访问频次异常" in str(msg):
+                    logger.warning(f"Frequency limit hit. Sleeping 900s. Retries left: {retries}")
+                    time.sleep(900)
+                    retries -= 1
+                elif "异常" in str(msg) or "300013" in str(msg):
+                    logger.warning(f"Rate limit hit. Sleeping 45s. Retries left: {retries}")
+                    time.sleep(45 + random.uniform(1, 10))
+                    retries -= 1
+                else:
+                    retries -= 1
+                    logger.warning(f"Failed to scrape note {note_url}. Retrying... ({retries} left). Msg: {msg}")
+                    time.sleep(self.throttle_min)
+            
+            if not success_overall:
+                failed_log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "failed_urls.txt")
+                with open(failed_log_path, "a", encoding="utf-8") as f:
+                    f.write(f"{note_url}\n")
+                logger.error(f"Note failed all retries. Recorded in {failed_log_path}: {note_url}")
+            
+            # Sleep after processing each note (or after failed retries)
+            random_sleep = random.uniform(self.throttle_min, self.throttle_max)
+            logger.info(f"Sleeping {random_sleep:.2f}s...")
+            time.sleep(random_sleep)
+        
+        # Save remaining buffer
+        if (save_choice == 'all' or save_choice == 'excel') and buffer_list:
+            save_to_xlsx(buffer_list, file_path)
 
 
     def spider_user_all_note(self, user_url: str, cookies_str: str, base_path: dict, save_choice: str, excel_name: str = '', proxies=None):
@@ -63,14 +169,29 @@ class Data_Spider():
         """
         note_list = []
         try:
-            success, msg, all_note_info = self.xhs_apis.get_user_all_notes(user_url, cookies_str, proxies)
+            # Determine excel path and read existing IDs
+            if save_choice == 'all' or save_choice == 'excel':
+                if excel_name == '':
+                    excel_name = user_url.split('/')[-1].split('?')[0]
+                file_path = os.path.abspath(os.path.join(base_path['excel'], f'{excel_name}.xlsx'))
+            
+            scraped_ids = set()
+            if os.path.exists(file_path):
+                 scraped_ids = get_scraped_note_ids(file_path)
+                 logger.info(f"Incremental Fetch: Found {len(scraped_ids)} existing notes. Will stop list fetching upon encountering them.")
+
+            # Pass scraped_ids to allow skipping in the API layer
+            success, msg, all_note_info = self.xhs_apis.get_user_all_notes(user_url, cookies_str, proxies, stop_id_set=scraped_ids)
             if success:
                 logger.info(f'用户 {user_url} 作品数量: {len(all_note_info)}')
                 for simple_note_info in all_note_info:
-                    note_url = f"https://www.xiaohongshu.com/explore/{simple_note_info['note_id']}?xsec_token={simple_note_info['xsec_token']}"
+                    # Skip video notes as requested by user
+                    if simple_note_info.get('type') == 'video':
+                        # logger.info(f"Skipping video note: {simple_note_info['note_id']}")
+                        continue
+                        
+                    note_url = f"https://www.xiaohongshu.com/explore/{simple_note_info['note_id']}?xsec_token={simple_note_info['xsec_token']}&xsec_source=pc_user"
                     note_list.append(note_url)
-            if save_choice == 'all' or save_choice == 'excel':
-                excel_name = user_url.split('/')[-1].split('?')[0]
             self.spider_some_note(note_list, cookies_str, base_path, save_choice, excel_name, proxies)
         except Exception as e:
             success = False

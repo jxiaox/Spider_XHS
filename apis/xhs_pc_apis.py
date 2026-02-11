@@ -1,7 +1,7 @@
-# encoding: utf-8
 import json
 import re
 import urllib
+import time
 import requests
 from xhs_utils.xhs_util import splice_str, generate_request_params, generate_x_b3_traceid, get_common_headers
 from loguru import logger
@@ -144,6 +144,69 @@ class XHS_Apis():
         return success, msg, res_json
 
 
+    def get_initial_notes_from_html(self, user_url, cookies_str, proxies=None):
+        try:
+            headers, cookies, data = generate_request_params(cookies_str, user_url, '', 'GET')
+            response = requests.get(user_url, headers=headers, cookies=cookies, proxies=proxies)
+            html = response.text
+            
+            start_idx = html.find("window.__INITIAL_STATE__=")
+            if start_idx == -1:
+                return False, "Initial state not found", [], ""
+            
+            start_brace = html.find("{", start_idx)
+            if start_brace == -1:
+                return False, "Start brace not found", [], ""
+
+            count = 0
+            end_brace = -1
+            for i in range(start_brace, len(html)):
+                if html[i] == '{':
+                    count += 1
+                elif html[i] == '}':
+                    count -= 1
+                    if count == 0:
+                        end_brace = i + 1
+                        break
+            
+            if end_brace == -1:
+                return False, "End brace not found", [], ""
+
+            json_str = html[start_brace:end_brace]
+            json_str = json_str.replace("undefined", "null")
+            data = json.loads(json_str)
+            
+            # Extract notes from data['user']['notes'][0]
+            notes_raw = data.get('user', {}).get('notes', [[]])[0]
+            notes = []
+            for item in notes_raw:
+                # Normalize to match API structure (flatten noteCard)
+                if 'noteCard' in item:
+                    note = item['noteCard']
+                    # ensure note_id is top level
+                    if 'noteId' in note:
+                        note['note_id'] = note['noteId']
+                    if 'xsecToken' in note:
+                        note['xsec_token'] = note['xsecToken']
+                    notes.append(note)
+                elif 'id' in item:
+                     # fallback
+                     item['note_id'] = item['id']
+                     if 'xsecToken' in item:
+                         item['xsec_token'] = item['xsecToken']
+                     notes.append(item)
+
+            # Extract cursor from data['user']['noteQueries'][0]['cursor']
+            queries = data.get('user', {}).get('noteQueries', [{}])
+            cursor = ""
+            if queries and len(queries) > 0:
+                cursor = queries[0].get('cursor', "")
+
+            return True, "Success", notes, cursor
+
+        except Exception as e:
+            return False, str(e), [], ""
+
     def get_user_self_info2(self, cookies_str: str, proxies: dict = None):
         """
             获取用户自己的信息2
@@ -192,11 +255,12 @@ class XHS_Apis():
         return success, msg, res_json
 
 
-    def get_user_all_notes(self, user_url: str, cookies_str: str, proxies: dict = None):
+    def get_user_all_notes(self, user_url: str, cookies_str: str, proxies: dict = None, stop_id_set: set = None):
         """
            获取用户所有笔记
            :param user_id: 你想要获取的用户的id
            :param cookies_str: 你的cookies
+           :param stop_id_set: 已存在的笔记ID集合，遇到其中的ID将停止抓取
            返回用户的所有笔记
         """
         cursor = ''
@@ -204,25 +268,98 @@ class XHS_Apis():
         try:
             urlParse = urllib.parse.urlparse(user_url)
             user_id = urlParse.path.split("/")[-1]
-            kvs = urlParse.query.split('&')
-            kvDist = {kv.split('=')[0]: kv.split('=')[1] for kv in kvs}
-            xsec_token = kvDist['xsec_token'] if 'xsec_token' in kvDist else ""
-            xsec_source = kvDist['xsec_source'] if 'xsec_source' in kvDist else "pc_search"
+            kvDist = {}
+            if urlParse.query:
+                kvs = urlParse.query.split('&')
+                for kv in kvs:
+                    parts = kv.split('=')
+                    if len(parts) >= 2:
+                        kvDist[parts[0]] = parts[1]
+            xsec_token = kvDist.get('xsec_token', "")
+            xsec_source = kvDist.get('xsec_source', "pc_user") # Default to pc_user for profiles
+            page_count = 0
             while True:
-                success, msg, res_json = self.get_user_note_info(user_id, cursor, cookies_str, xsec_token, xsec_source, proxies)
-                if not success:
-                    raise Exception(msg)
+                # Try HTML fetch for first page if cursor is empty
+                if cursor == "" and page_count == 0:
+                    logger.info("Attempting to fetch first page from HTML...")
+                    h_success, h_msg, h_notes, h_cursor = self.get_initial_notes_from_html(user_url, cookies_str, proxies)
+                    if h_success and len(h_notes) > 0:
+                        logger.info(f"Initialized from HTML: {len(h_notes)} notes, Next Cursor: {h_cursor}")
+                        note_list.extend(h_notes)
+                        cursor = h_cursor
+                        page_count += 1
+                        # If cursor is empty after HTML fetch, we are done
+                        if not cursor:
+                            break
+                        continue # Skip to next iteration (using API with cursor)
+                    else:
+                        logger.warning(f"HTML fetch failed or empty: {h_msg}. Falling back to API.")
+
+                # AJAX Retry Logic
+                max_retries = 3
+                res_json = None
+                for attempt in range(max_retries):
+                    success, msg, res_json = self.get_user_note_info(user_id, cursor, cookies_str, xsec_token, xsec_source, proxies)
+                    if success and res_json and "data" in res_json and "notes" in res_json["data"]:
+                        break
+                    
+                    logger.warning(f"AJAX Attempt {attempt+1} failed or empty. Response: {res_json}. Msg: {msg}")
+                    
+                    if res_json and res_json.get("msg") == "登录已过期":
+                        logger.error("Login expired detected in AJAX. Exiting scraper.")
+                        import sys
+                        sys.exit(1)
+
+                    if attempt < max_retries - 1:
+                        wait_time = (attempt + 1) * 30
+                        logger.info(f"Sleeping {wait_time}s before retry...")
+                        time.sleep(wait_time)
+                
+                if not res_json or "data" not in res_json or "notes" not in res_json["data"]:
+                    logger.error(f"Failed to fetch notes after {max_retries} attempts. Final Response: {res_json}")
+                    # If we already have some notes, just return them instead of crashing
+                    if len(note_list) > 0:
+                        break
+                    raise Exception(f"Invalid response structure. Keys: {res_json.keys() if res_json else 'None'}")
+
                 notes = res_json["data"]["notes"]
+                logger.info(f"Fetched page {page_count}. Notes: {len(notes)}, Has More: {res_json['data'].get('has_more', False)}, Cursor: {res_json['data'].get('cursor', 'None')}")
+                
+                # Check for existing IDs to stop early
+                if stop_id_set:
+                    new_notes_on_page = []
+                    for note in notes:
+                        if str(note['note_id']) in stop_id_set:
+                            logger.info(f"Skipping existing note {note['note_id']}")
+                            continue 
+                        new_notes_on_page.append(note)
+                    note_list.extend(new_notes_on_page)
+                else:
+                    note_list.extend(notes)
+
                 if 'cursor' in res_json["data"]:
                     cursor = str(res_json["data"]["cursor"])
                 else:
                     break
-                note_list.extend(notes)
+                
                 if len(notes) == 0 or not res_json["data"]["has_more"]:
                     break
+                
+                # Rate Limiting
+                page_count += 1
+                if page_count % 10 == 0:
+                    logger.info("Fetched 10 pages. Sleeping for 2 minutes (120s)...")
+                    time.sleep(120)
+                else:
+                    logger.info("Sleeping 20s after page fetch...") # Increase to 20s
+                    time.sleep(20)
         except Exception as e:
-            success = False
             msg = str(e)
+            if len(note_list) > 0:
+                success = True
+                logger.warning(f"Exception occurred but {len(note_list)} notes were fetched: {msg}")
+            else:
+                success = False
         return success, msg, note_list
 
     def get_user_like_note_info(self, user_id: str, cursor: str, cookies_str: str, xsec_token='', xsec_source='', proxies: dict = None):
@@ -363,8 +500,13 @@ class XHS_Apis():
         try:
             urlParse = urllib.parse.urlparse(url)
             note_id = urlParse.path.split("/")[-1]
-            kvs = urlParse.query.split('&')
-            kvDist = {kv.split('=')[0]: kv.split('=')[1] for kv in kvs}
+            kvDist = {}
+            if urlParse.query:
+                kvs = urlParse.query.split('&')
+                for kv in kvs:
+                    parts = kv.split('=')
+                    if len(parts) >= 2:
+                        kvDist[parts[0]] = parts[1]
             api = f"/api/sns/web/v1/feed"
             data = {
                 "source_note_id": note_id,
@@ -376,17 +518,144 @@ class XHS_Apis():
                 "extra": {
                     "need_body_topic": "1"
                 },
-                "xsec_source": kvDist['xsec_source'] if 'xsec_source' in kvDist else "pc_search",
-                "xsec_token": kvDist['xsec_token']
+                "xsec_source": kvDist.get('xsec_source', "pc_search"),
+                "xsec_token": kvDist.get('xsec_token')
             }
             headers, cookies, data = generate_request_params(cookies_str, api, data, 'POST')
             response = requests.post(self.base_url + api, headers=headers, data=data, cookies=cookies, proxies=proxies)
             res_json = response.json()
-            success, msg = res_json["success"], res_json["msg"]
+            if res_json.get("code") == 300013 or "异常" in res_json.get("msg", ""):
+                success = False
+            else:
+                success = res_json.get("success", False)
+            msg = res_json.get("msg", "")
         except Exception as e:
             success = False
             msg = str(e)
         return success, msg, res_json
+
+
+    def get_note_info_from_html(self, note_id: str, note_url: str, cookies_str: str, proxies: dict = None):
+        """
+        Fallback: Get note detail from HTML parsing with data normalization
+        """
+        try:
+            headers, cookies, data = generate_request_params(cookies_str, note_url, '', 'GET')
+            headers["User-Agent"] = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            
+            response = requests.get(note_url, headers=headers, cookies=cookies, proxies=proxies)
+            html = response.text
+            
+            start_idx = html.find("window.__INITIAL_STATE__=")
+            if start_idx == -1:
+                return False, "Initial state not found", {}
+            
+            start_brace = html.find("{", start_idx)
+            if start_brace == -1:
+                return False, "Start brace not found", {}
+
+            count = 0
+            end_brace = -1
+            for i in range(start_brace, len(html)):
+                if html[i] == '{':
+                    count += 1
+                elif html[i] == '}':
+                    count -= 1
+                    if count == 0:
+                        end_brace = i + 1
+                        break
+            
+            if end_brace == -1:
+                return False, "End brace not found", {}
+
+            json_str = html[start_brace:end_brace]
+            json_str = json_str.replace("undefined", "null")
+            data = json.loads(json_str)
+            
+            if 'note' in data and 'noteDetailMap' in data['note']:
+                detail_map = data['note']['noteDetailMap']
+                
+                # Try exact match first, then fallback to first available item
+                if note_id in detail_map:
+                    note_wrapper = detail_map[note_id]
+                elif len(detail_map) > 0:
+                    # Fallback: take the first available item in the map
+                    # This handles cases where the key is 'null' or mismatched
+                    first_key = list(detail_map.keys())[0]
+                    note_wrapper = detail_map[first_key]
+                else:
+                    return False, "Note map empty", {}
+
+                if 'note' in note_wrapper:
+                    raw_note = note_wrapper['note']
+                else:
+                    raw_note = note_wrapper
+                
+                # Check validity
+                if not raw_note:
+                     return False, "Extracted note data is empty", {}
+
+                # Construct note_card matching handle_note_info expectations
+                note_card = {}
+                note_card['type'] = raw_note.get('type', 'normal')
+                note_card['title'] = raw_note.get('title', '无标题')
+                note_card['desc'] = raw_note.get('desc', '')
+                note_card['time'] = raw_note.get('time', raw_note.get('lastUpdateTime', 0))
+                note_card['last_update_time'] = raw_note.get('lastUpdateTime', 0)
+                note_card['ip_location'] = raw_note.get('ipLocation', '未知')
+
+                # User
+                raw_user = raw_note.get('user', {})
+                note_card['user'] = {
+                    'user_id': raw_user.get('userId', ''),
+                    'nickname': raw_user.get('nickname', ''),
+                    'avatar': raw_user.get('avatar', ''),
+                }
+
+                # Interact Info
+                raw_interact = raw_note.get('interactInfo', {})
+                note_card['interact_info'] = {
+                    'liked_count': raw_interact.get('likedCount', '0'),
+                    'collected_count': raw_interact.get('collectedCount', '0'),
+                    'comment_count': raw_interact.get('commentCount', '0'),
+                    'share_count': raw_interact.get('shareCount', '0'),
+                }
+
+                # Image List - map to [{'info_list': [..., {'url': ...}]}]
+                raw_images = raw_note.get('imageList', [])
+                image_list = []
+                for img in raw_images:
+                    # Assuming structure matches generic logic or simplified
+                    url = img.get('urlDefault', img.get('url', ''))
+                    if url:
+                            # Mock the info_list[1]['url'] structure
+                            image_list.append({'info_list': [{}, {'url': url}]})
+                note_card['image_list'] = image_list
+
+                # Video - map to {'consumer': {'origin_video_key': ...}}
+                if 'video' in raw_note:
+                    raw_video = raw_note['video']
+                    consumer = raw_video.get('consumer', {})
+                    if 'originVideoKey' in consumer:
+                        consumer['origin_video_key'] = consumer['originVideoKey']
+                    note_card['video'] = {'consumer': consumer}
+
+                # Tag List
+                raw_tags = raw_note.get('tagList', [])
+                note_card['tag_list'] = raw_tags # Assumes [{'name': '...'}]
+
+                final_data = {
+                    'id': raw_note.get('noteId', note_id), # Critical for handle_note_info
+                    'note_id': raw_note.get('noteId', note_id),
+                    'note_card': note_card
+                }
+                
+                return True, "Success", {'data': {'items': [final_data]}}
+            
+            return False, "Note not found in HTML map", {}
+
+        except Exception as e:
+            return False, str(e), {}
 
 
     def get_search_keyword(self, word: str, cookies_str: str, proxies: dict = None):
