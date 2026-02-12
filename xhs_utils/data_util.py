@@ -4,7 +4,7 @@ import re
 import time
 import openpyxl
 import requests
-import multiprocessing
+import threading
 from loguru import logger
 from retry import retry
 
@@ -293,18 +293,14 @@ except ImportError:
 except Exception as e:
     logger.warning(f"Failed to init OCR: {e}")
 
-def ocr_worker(img_path, result_queue):
-    """Worker function for OCR to be run in a separate process."""
+def ocr_worker(img_path, result_holder):
+    """Worker function for OCR to be run in a thread with timeout.
+    Uses the global OCR_ENGINE directly instead of spawning a new process."""
     try:
-        # Re-init OCR in worker process to avoid issues on some platforms
-        from paddleocr import PaddleOCR
-        import logging
-        logging.getLogger("ppocr").setLevel(logging.ERROR)
-        worker_ocr = PaddleOCR(use_angle_cls=True, lang="ch")
-        res = worker_ocr.ocr(img_path)
-        result_queue.put(res)
+        res = OCR_ENGINE.ocr(img_path)
+        result_holder['result'] = res
     except Exception as e:
-        result_queue.put(e)
+        result_holder['error'] = e
 
 @retry(tries=3, delay=1)
 def download_note(note_info, path, save_choice):
@@ -339,39 +335,41 @@ def download_note(note_info, path, save_choice):
             img_name = f'image_{img_index}'
             download_media(save_path, img_name, img_url, 'image')
             
-            # OCR Logic with Timeout
+            # OCR Logic with Timeout (using threading to avoid multiprocessing spawn issues)
             if OCR_ENGINE:
                 try:
                     img_full_path = os.path.join(save_path, f'{img_name}.jpg')
                     if os.path.exists(img_full_path):
-                        # Use multiprocessing for OCR with timeout
-                        result_queue = multiprocessing.Queue()
-                        p = multiprocessing.Process(target=ocr_worker, args=(img_full_path, result_queue))
-                        p.start()
-                        p.join(timeout=30) # 30s timeout
+                        # Use threading for OCR with timeout
+                        result_holder = {}
+                        t = threading.Thread(target=ocr_worker, args=(img_full_path, result_holder), daemon=True)
+                        t.start()
+                        t.join(timeout=30) # 30s timeout
                         
-                        if p.is_alive():
+                        if t.is_alive():
                             logger.warning(f"OCR timed out for {img_name}")
-                            p.terminate()
-                            p.join(timeout=5)
-                            if p.is_alive():
-                                logger.warning(f"OCR worker still alive after terminate, killing it for {img_name}")
-                                p.kill()
-                                p.join()
                             content = "OCR超时"
-                        else:
-                            res = result_queue.get() if not result_queue.empty() else None
-                            if isinstance(res, Exception):
-                                logger.warning(f"OCR worker error for {img_name}: {res}")
-                                content = "OCR失败"
-                            elif res and res[0]:
-                                text_lines = []
-                                for line in res[0]:
-                                    if line and len(line) >= 2:
-                                        text_lines.append(line[1][0])
+                        elif 'error' in result_holder:
+                            logger.warning(f"OCR worker error for {img_name}: {result_holder['error']}")
+                            content = "OCR失败"
+                        elif 'result' in result_holder:
+                            res = result_holder['result']
+                            if res and res[0]:
+                                ocr_item = res[0]
+                                # PaddleOCR v5: OCRResult with rec_texts key
+                                if hasattr(ocr_item, 'get') and 'rec_texts' in ocr_item:
+                                    text_lines = [t for t in ocr_item['rec_texts'] if t.strip()]
+                                else:
+                                    # Legacy format: list of [box, (text, score)]
+                                    text_lines = []
+                                    for line in ocr_item:
+                                        if line and len(line) >= 2:
+                                            text_lines.append(line[1][0])
                                 content = ", ".join(text_lines) if text_lines else "无"
                             else:
                                 content = "无"
+                        else:
+                            content = "无"
                         
                         ocr_results.append(f"图{img_index+1}: {content}")
                 except Exception as e:
