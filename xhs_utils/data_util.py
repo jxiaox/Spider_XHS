@@ -293,6 +293,35 @@ except ImportError:
 except Exception as e:
     logger.warning(f"Failed to init OCR: {e}")
 
+def is_text_image(img_path, threshold=70.0):
+    """Determine if an image is a text-on-solid-background image suitable for OCR.
+    
+    Analyzes the dominant color percentage of the image. Text post images from
+    Xiaohongshu typically have a solid color background (>70% of pixels are one
+    color), while photos/screenshots/charts have much more color diversity.
+    
+    Args:
+        img_path: Path to the image file.
+        threshold: Minimum dominant color percentage to classify as text image.
+                   Default 70% works well based on empirical testing.
+    Returns:
+        True if image appears to be a text-on-solid-background image.
+    """
+    try:
+        from PIL import Image
+        import numpy as np
+        img = Image.open(img_path).convert("RGB").resize((100, 100))
+        pixels = np.array(img).reshape(-1, 3)
+        # Quantize colors to 16-level bins to group similar shades
+        quantized = (pixels // 16) * 16
+        _, counts = np.unique(quantized, axis=0, return_counts=True)
+        dominant_pct = counts.max() / counts.sum() * 100
+        return dominant_pct >= threshold
+    except Exception as e:
+        logger.warning(f"is_text_image check failed for {img_path}: {e}")
+        return True  # Default to True (run OCR) on error
+
+
 def ocr_worker(img_path, result_holder):
     """Worker function for OCR to be run in a thread with timeout.
     Uses the global OCR_ENGINE directly instead of spawning a new process."""
@@ -340,6 +369,11 @@ def download_note(note_info, path, save_choice):
                 try:
                     img_full_path = os.path.join(save_path, f'{img_name}.jpg')
                     if os.path.exists(img_full_path):
+                        # Skip non-text images (photos, screenshots, charts)
+                        if not is_text_image(img_full_path):
+                            logger.info(f"Skipping OCR for {img_name}: not a text image")
+                            ocr_results.append(f"图{img_index+1}: 非文字图(跳过)")
+                            continue
                         # Use threading for OCR with timeout
                         result_holder = {}
                         t = threading.Thread(target=ocr_worker, args=(img_full_path, result_holder), daemon=True)
