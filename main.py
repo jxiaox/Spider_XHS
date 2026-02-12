@@ -180,8 +180,45 @@ class Data_Spider():
                  scraped_ids = get_scraped_note_ids(file_path)
                  logger.info(f"Incremental Fetch: Found {len(scraped_ids)} existing notes. Will stop list fetching upon encountering them.")
 
-            # Pass scraped_ids to allow skipping in the API layer
-            success, msg, all_note_info = self.xhs_apis.get_user_all_notes(user_url, cookies_str, proxies, stop_id_set=scraped_ids)
+            # Try to load from collected_urls.txt first
+            collected_urls_path = os.path.join(os.path.dirname(file_path), "../../collected_urls.txt")
+            collected_urls_path = os.path.abspath(collected_urls_path)
+            
+            all_note_info = []
+            if os.path.exists(collected_urls_path):
+                logger.info(f"Loading URLs from {collected_urls_path}...")
+                with open(collected_urls_path, 'r', encoding='utf-8') as f:
+                    urls = [line.strip() for line in f if line.strip()]
+                
+                for url in urls:
+                    try:
+                        # Parse note_id and xsec_token from URL
+                        # Format: https://www.xiaohongshu.com/explore/<note_id>?xsec_token=<token>&xsec_source=pc_user
+                        note_id = url.split('/explore/')[1].split('?')[0]
+                        params = url.split('?')[1].split('&')
+                        xsec_token = ""
+                        for p in params:
+                            if p.startswith('xsec_token='):
+                                xsec_token = p.split('=')[1]
+                                break
+                        
+                        all_note_info.append({
+                            'note_id': note_id,
+                            'note_url': url,
+                            'xsec_token': xsec_token,
+                            'xsec_source': 'pc_user'
+                        })
+                    except Exception as e:
+                        logger.warning(f"Failed to parse URL {url}: {e}")
+                
+                logger.info(f"Loaded {len(all_note_info)} notes from local file.")
+                success = True
+            else:
+                # Fallback to API if file missing
+                logger.info("Local URLs file not found, falling back to API fetch...")
+                # Pass None to force deep scrape (diable early termination in API)
+                success, msg, all_note_info = self.xhs_apis.get_user_all_notes(user_url, cookies_str, proxies, stop_id_set=None)
+            
             if success:
                 logger.info(f'用户 {user_url} 作品数量: {len(all_note_info)}')
                 for simple_note_info in all_note_info:
