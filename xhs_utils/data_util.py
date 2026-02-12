@@ -294,17 +294,17 @@ except ImportError:
 except Exception as e:
     logger.warning(f"Failed to init OCR: {e}")
 
-def is_text_image(img_path, threshold=70.0):
+def is_text_image(img_path, threshold=75.0):
     """Determine if an image is a text-on-solid-background image suitable for OCR.
     
     Analyzes the dominant color percentage of the image. Text post images from
-    Xiaohongshu typically have a solid color background (>70% of pixels are one
+    Xiaohongshu typically have a solid color background (>75% of pixels are one
     color), while photos/screenshots/charts have much more color diversity.
     
     Args:
         img_path: Path to the image file.
         threshold: Minimum dominant color percentage to classify as text image.
-                   Default 70% works well based on empirical testing.
+                   Default 75% avoids borderline cases that cause slow OCR.
     Returns:
         True if image appears to be a text-on-solid-background image.
     """
@@ -326,9 +326,9 @@ def is_text_image(img_path, threshold=70.0):
 def run_ocr_subprocess(img_path, timeout=60):
     """Run OCR on an image in a separate subprocess with timeout.
     
-    Uses subprocess.run() to invoke ocr_subprocess.py, which can be truly killed
-    (SIGKILL) on timeout. Unlike threading, this prevents PaddleOCR's C++ inference
-    from blocking the main process indefinitely.
+    Uses Popen + explicit SIGKILL to ensure the subprocess is truly killed on
+    timeout, even if it's in uninterruptible sleep (UE+ state). This is more
+    robust than subprocess.run(timeout=) which may fail to kill stuck processes.
     
     Args:
         img_path: Path to the image file.
@@ -337,29 +337,44 @@ def run_ocr_subprocess(img_path, timeout=60):
         List of extracted text strings, or None on failure/timeout.
     """
     import subprocess as sp
+    import signal
     script_path = os.path.join(os.path.dirname(__file__), 'ocr_subprocess.py')
     python_path = sys.executable
+    proc = None
     try:
-        result = sp.run(
+        proc = sp.Popen(
             [python_path, script_path, img_path],
-            capture_output=True, text=True, timeout=timeout,
-            cwd=os.path.dirname(os.path.abspath(img_path))
+            stdout=sp.PIPE, stderr=sp.PIPE, text=True,
+            preexec_fn=os.setsid  # Create new process group for reliable kill
         )
-        if result.returncode == 0 and result.stdout.strip():
-            data = json.loads(result.stdout.strip())
+        stdout, stderr = proc.communicate(timeout=timeout)
+        if proc.returncode == 0 and stdout.strip():
+            data = json.loads(stdout.strip())
             if 'texts' in data:
                 return data['texts']
             else:
                 logger.warning(f"OCR subprocess error: {data.get('error', 'unknown')}")
                 return None
         else:
-            logger.warning(f"OCR subprocess failed (rc={result.returncode}): {result.stderr[:200]}")
+            logger.warning(f"OCR subprocess failed (rc={proc.returncode}): {stderr[:200] if stderr else 'no stderr'}")
             return None
     except sp.TimeoutExpired:
         logger.warning(f"OCR subprocess timed out after {timeout}s for {img_path}")
+        if proc:
+            try:
+                # Kill entire process group with SIGKILL
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                pass
+            proc.wait()  # Reap zombie
         return None
     except Exception as e:
         logger.warning(f"OCR subprocess exception: {e}")
+        if proc and proc.poll() is None:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                pass
         return None
 
 @retry(tries=3, delay=1)
