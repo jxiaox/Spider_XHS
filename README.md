@@ -89,7 +89,7 @@ npm install
 ### 🚀运行项目
 
 ```
-python main.py
+caffeinate -i python main.py
 ```
 
 ### 🔄 进阶运行：独立采集模式 (推荐)
@@ -99,14 +99,15 @@ python main.py
 1. **采集链接** (更新 `collected_urls.txt`)：
 
    ```bash
-   python collect_urls_via_browser.py
+   caffeinate -i python collect_urls_via_browser.py
    ```
 
    _注意：需要本机安装 Chrome/Edge 浏览器_
 
 2. **抓取内容** (读取列表并抓取)：
    ```bash
-   python scrape_from_local.py
+   # 使用 caffeinate -i 防止 Mac 睡眠
+   caffeinate -i python scrape_from_local.py
    ```
    _特点：支持断点续传，自动跳过已下载笔记，不依赖 API 分页_
 
