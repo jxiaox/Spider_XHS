@@ -19,6 +19,7 @@ class Data_Spider():
     def spider_note(self, note_url: str, cookies_str: str, proxies=None):
         """
         爬取一个笔记的信息
+        """
         note_info = None
         try:
             success, msg, note_info = self.xhs_apis.get_note_info(note_url, cookies_str, proxies)
@@ -373,19 +374,9 @@ class Data_Spider():
         return note_list, success, msg
 
 if __name__ == '__main__':
-    """
-        此文件为爬虫的入口文件，可以直接运行
-        apis/xhs_pc_apis.py 为爬虫的api文件，包含小红书的全部数据接口，可以继续封装
-        apis/xhs_creator_apis.py 为小红书创作者中心的api文件
-        感谢star和follow
-    """
 
     cookies_str, base_path = init()
     data_spider = Data_Spider()
-    """
-        save_choice: all: 保存所有的信息, media: 保存视频和图片（media-video只下载视频, media-image只下载图片，media都下载）, excel: 保存到excel
-        save_choice 为 excel 或者 all 时，excel_name 不能为空
-    """
 
 
     # 1 爬取列表的所有笔记信息 笔记链接 如下所示 注意此url会过期！
