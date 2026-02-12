@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import sys
 import time
 import openpyxl
 import requests
@@ -322,17 +323,48 @@ def is_text_image(img_path, threshold=70.0):
         return True  # Default to True (run OCR) on error
 
 
-def ocr_worker(img_path, result_holder):
-    """Worker function for OCR to be run in a thread with timeout.
-    Uses the global OCR_ENGINE directly instead of spawning a new process."""
+def run_ocr_subprocess(img_path, timeout=60):
+    """Run OCR on an image in a separate subprocess with timeout.
+    
+    Uses subprocess.run() to invoke ocr_subprocess.py, which can be truly killed
+    (SIGKILL) on timeout. Unlike threading, this prevents PaddleOCR's C++ inference
+    from blocking the main process indefinitely.
+    
+    Args:
+        img_path: Path to the image file.
+        timeout: Maximum seconds to wait for OCR. Default 60s.
+    Returns:
+        List of extracted text strings, or None on failure/timeout.
+    """
+    import subprocess as sp
+    script_path = os.path.join(os.path.dirname(__file__), 'ocr_subprocess.py')
+    python_path = sys.executable
     try:
-        res = OCR_ENGINE.ocr(img_path)
-        result_holder['result'] = res
+        result = sp.run(
+            [python_path, script_path, img_path],
+            capture_output=True, text=True, timeout=timeout,
+            cwd=os.path.dirname(os.path.abspath(img_path))
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            data = json.loads(result.stdout.strip())
+            if 'texts' in data:
+                return data['texts']
+            else:
+                logger.warning(f"OCR subprocess error: {data.get('error', 'unknown')}")
+                return None
+        else:
+            logger.warning(f"OCR subprocess failed (rc={result.returncode}): {result.stderr[:200]}")
+            return None
+    except sp.TimeoutExpired:
+        logger.warning(f"OCR subprocess timed out after {timeout}s for {img_path}")
+        return None
     except Exception as e:
-        result_holder['error'] = e
+        logger.warning(f"OCR subprocess exception: {e}")
+        return None
 
 @retry(tries=3, delay=1)
 def download_note(note_info, path, save_choice):
+    """Download a note's media and perform OCR on text images."""
     note_id = note_info['note_id']
     user_id = note_info['user_id']
     title = note_info['title']
@@ -364,7 +396,7 @@ def download_note(note_info, path, save_choice):
             img_name = f'image_{img_index}'
             download_media(save_path, img_name, img_url, 'image')
             
-            # OCR Logic with Timeout (using threading to avoid multiprocessing spawn issues)
+            # OCR Logic via subprocess (can be truly killed on timeout)
             if OCR_ENGINE:
                 try:
                     img_full_path = os.path.join(save_path, f'{img_name}.jpg')
@@ -374,36 +406,12 @@ def download_note(note_info, path, save_choice):
                             logger.info(f"Skipping OCR for {img_name}: not a text image")
                             ocr_results.append(f"图{img_index+1}: 非文字图(跳过)")
                             continue
-                        # Use threading for OCR with timeout
-                        result_holder = {}
-                        t = threading.Thread(target=ocr_worker, args=(img_full_path, result_holder), daemon=True)
-                        t.start()
-                        t.join(timeout=30) # 30s timeout
-                        
-                        if t.is_alive():
-                            logger.warning(f"OCR timed out for {img_name}")
-                            content = "OCR超时"
-                        elif 'error' in result_holder:
-                            logger.warning(f"OCR worker error for {img_name}: {result_holder['error']}")
-                            content = "OCR失败"
-                        elif 'result' in result_holder:
-                            res = result_holder['result']
-                            if res and res[0]:
-                                ocr_item = res[0]
-                                # PaddleOCR v5: OCRResult with rec_texts key
-                                if hasattr(ocr_item, 'get') and 'rec_texts' in ocr_item:
-                                    text_lines = [t for t in ocr_item['rec_texts'] if t.strip()]
-                                else:
-                                    # Legacy format: list of [box, (text, score)]
-                                    text_lines = []
-                                    for line in ocr_item:
-                                        if line and len(line) >= 2:
-                                            text_lines.append(line[1][0])
-                                content = ", ".join(text_lines) if text_lines else "无"
-                            else:
-                                content = "无"
+                        # Run OCR in subprocess with 60s timeout
+                        text_lines = run_ocr_subprocess(img_full_path, timeout=60)
+                        if text_lines is not None:
+                            content = ", ".join(text_lines) if text_lines else "无"
                         else:
-                            content = "无"
+                            content = "OCR超时/失败"
                         
                         ocr_results.append(f"图{img_index+1}: {content}")
                 except Exception as e:
