@@ -184,10 +184,9 @@ def handle_comment_info(data):
         'pictures': pictures,
     }
 def save_to_xlsx(datas, file_path, type='note'):
-    if os.path.exists(file_path):
-        wb = openpyxl.load_workbook(file_path)
-        ws = wb.active
-    else:
+    """Save data to xlsx file, appending to existing file or creating new one.
+    Handles corrupted xlsx files gracefully by creating a new workbook."""
+    def _create_new_workbook(type):
         wb = openpyxl.Workbook()
         ws = wb.active
         if type == 'note':
@@ -197,11 +196,27 @@ def save_to_xlsx(datas, file_path, type='note'):
         else:
             headers = ['笔记id', '笔记url', '评论id', '用户id', '用户主页url', '昵称', '头像url', '评论内容', '评论标签', '点赞数量', '上传时间', 'ip归属地', '图片地址url列表']
         ws.append(headers)
+        return wb, ws
+
+    if os.path.exists(file_path):
+        try:
+            wb = openpyxl.load_workbook(file_path)
+            ws = wb.active
+        except Exception as e:
+            # Excel file is corrupted; back it up and create a fresh one
+            logger.warning(f"Corrupted xlsx file {file_path}: {e}. Backing up and creating new.")
+            backup_path = file_path + '.corrupted'
+            try:
+                os.rename(file_path, backup_path)
+            except Exception:
+                pass
+            wb, ws = _create_new_workbook(type)
+    else:
+        wb, ws = _create_new_workbook(type)
     
     for data in datas:
         data = {k: norm_text(str(v)) for k, v in data.items()}
         ws.append(list(data.values()))
-    wb.save(file_path)
     wb.save(file_path)
     logger.info(f'数据保存(追加)至 {file_path}')
 
