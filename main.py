@@ -19,10 +19,6 @@ class Data_Spider():
     def spider_note(self, note_url: str, cookies_str: str, proxies=None):
         """
         爬取一个笔记的信息
-        :param note_url:
-        :param cookies_str:
-        :return:
-        """
         note_info = None
         try:
             success, msg, note_info = self.xhs_apis.get_note_info(note_url, cookies_str, proxies)
@@ -159,6 +155,98 @@ class Data_Spider():
             save_to_xlsx(buffer_list, file_path)
 
 
+    def spider_from_file(self, file_path, cookies_str, base_path, proxies=None):
+        """
+        New Entry Point: Scrape notes specifically from a local file containing URLs.
+        """
+        if not os.path.exists(file_path):
+            logger.error(f"File not found: {file_path}")
+            return
+
+        logger.info(f"Loading URLs from {file_path}...")
+        all_note_info = []
+        with open(file_path, 'r', encoding='utf-8') as f:
+            urls = [line.strip() for line in f if line.strip()]
+        
+        for url in urls:
+            try:
+                if '/explore/' not in url:
+                    continue
+                note_id = url.split('/explore/')[1].split('?')[0]
+                params = url.split('?')[1].split('&')
+                xsec_token = ""
+                for p in params:
+                    if p.startswith('xsec_token='):
+                        xsec_token = p.split('=')[1]
+                        break
+                
+                all_note_info.append({
+                    'note_id': note_id,
+                    'note_url': url,
+                    'xsec_token': xsec_token,
+                    'xsec_source': 'pc_user'
+                })
+            except Exception as e:
+                logger.warning(f"Failed to parse URL {url}: {e}")
+        
+        logger.info(f"Loaded {len(all_note_info)} notes from local file.")
+        
+        # Build Skip List
+        scraped_ids = set()
+        user_id = "5b6150c56b58b741e26b8c7f" # Hardcoded for this specific user/task context
+        excel_path = os.path.join(base_path['excel'], f'{user_id}.xlsx')
+        
+        if os.path.exists(excel_path):
+             scraped_ids = get_scraped_note_ids(excel_path)
+
+        # Check scraped_urls.txt
+        scraped_txt_path = os.path.abspath(os.path.join(base_path['excel'], "../../scraped_urls.txt")) 
+        if os.path.exists(scraped_txt_path):
+            with open(scraped_txt_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if '/explore/' in line:
+                         try:
+                            nid = line.split('/explore/')[1].split('?')[0]
+                            scraped_ids.add(nid)
+                         except: pass
+        
+        logger.info(f"Total Skippable Notes: {len(scraped_ids)}")
+
+        for simple_note_info in all_note_info:
+            if simple_note_info.get('type') == 'video':
+                continue
+                
+            note_id = simple_note_info['note_id']
+            if note_id in scraped_ids:
+                # logger.info(f"Skipping already scraped note: {note_id}")
+                continue
+            
+            # Using spider_some_note which expects a list of URLs
+            # But wait, spider_some_note iterates and calls spider_note.
+            # We can construct the URL list to pass to it.
+            # However, spider_some_note also does some logging.
+            # Let's just construct the list of URLs to process.
+            
+            target_url = simple_note_info['note_url']
+            # Pass single note to verify one by one? 
+            # spider_some_note takes a list. Let's pass a list of 1 to keep flow control here?
+            # Or pass the whole remaining list. Passing whole list is better for the loop inside spider_some_note.
+            pass
+
+        # Filter note_list to only process unsaved ones
+        final_note_urls = []
+        for info in all_note_info:
+             if info['note_id'] not in scraped_ids and info.get('type') != 'video':
+                  final_note_urls.append(info['note_url'])
+        
+        logger.info(f"Remaining Notes to Scrape: {len(final_note_urls)}")
+        
+        # Call the existing method to scrape the list
+        # spider_some_note(self, note_list: list, cookies_str: str, base_path: dict, save_choice: str, excel_name: str = '', proxies=None)
+        self.spider_some_note(final_note_urls, cookies_str, base_path, 'all', str(user_id), proxies)
+
+
     def spider_user_all_note(self, user_url: str, cookies_str: str, base_path: dict, save_choice: str, excel_name: str = '', proxies=None):
         """
         爬取一个用户的所有笔记
@@ -178,7 +266,23 @@ class Data_Spider():
             scraped_ids = set()
             if os.path.exists(file_path):
                  scraped_ids = get_scraped_note_ids(file_path)
-                 logger.info(f"Incremental Fetch: Found {len(scraped_ids)} existing notes. Will stop list fetching upon encountering them.")
+
+            # Also load from scraped_urls.txt if exists (for double safety)
+            scraped_txt_path = os.path.abspath(os.path.join(base_path['excel'], "../../scraped_urls.txt")) 
+            if os.path.exists(scraped_txt_path):
+                with open(scraped_txt_path, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line: continue
+                        # Format: https://www.xiaohongshu.com/explore/<note_id>?...
+                        try:
+                            if '/explore/' in line:
+                                nid = line.split('/explore/')[1].split('?')[0]
+                                scraped_ids.add(nid)
+                        except:
+                            pass
+            
+            logger.info(f"Total Skippable Notes (Excel + Txt): {len(scraped_ids)}")
 
             # Try to load from collected_urls.txt first
             collected_urls_path = os.path.join(os.path.dirname(file_path), "../../collected_urls.txt")
