@@ -294,30 +294,39 @@ except ImportError:
 except Exception as e:
     logger.warning(f"Failed to init OCR: {e}")
 
-def is_text_image(img_path, threshold=75.0):
+def is_text_image(img_path):
     """Determine if an image is a text-on-solid-background image suitable for OCR.
     
-    Analyzes the dominant color percentage of the image. Text post images from
-    Xiaohongshu typically have a solid color background (>75% of pixels are one
-    color), while photos/screenshots/charts have much more color diversity.
+    Uses dual criteria to detect text template images from Xiaohongshu:
+    1. Dominant color percentage: text images have a solid background color
+       occupying a large portion of pixels.
+    2. Unique color count: text images have very few distinct colors (background,
+       text color, maybe 1-2 accent colors), while photos have hundreds.
+    
+    Uses quantization bin size of 32 (instead of 16) to handle JPEG compression
+    noise that splits similar colors into separate bins.
     
     Args:
         img_path: Path to the image file.
-        threshold: Minimum dominant color percentage to classify as text image.
-                   Default 75% avoids borderline cases that cause slow OCR.
     Returns:
         True if image appears to be a text-on-solid-background image.
     """
     try:
         from PIL import Image
         import numpy as np
-        img = Image.open(img_path).convert("RGB").resize((100, 100))
+        img = Image.open(img_path).convert("RGB").resize((50, 50))
         pixels = np.array(img).reshape(-1, 3)
-        # Quantize colors to 16-level bins to group similar shades
-        quantized = (pixels // 16) * 16
-        _, counts = np.unique(quantized, axis=0, return_counts=True)
+        # Quantize with larger bins (32) to absorb JPEG noise
+        quantized = (pixels // 32) * 32
+        unique_colors, counts = np.unique(quantized, axis=0, return_counts=True)
+        num_colors = len(unique_colors)
         dominant_pct = counts.max() / counts.sum() * 100
-        return dominant_pct >= threshold
+        
+        # Text images: few colors AND dominant background
+        # Photos/screenshots: many colors with no single dominant color
+        is_text = (dominant_pct >= 50.0 and num_colors <= 25)
+        logger.debug(f"is_text_image: {img_path} -> dominant={dominant_pct:.1f}%, colors={num_colors}, is_text={is_text}")
+        return is_text
     except Exception as e:
         logger.warning(f"is_text_image check failed for {img_path}: {e}")
         return True  # Default to True (run OCR) on error
