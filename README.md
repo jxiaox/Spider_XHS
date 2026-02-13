@@ -111,6 +111,51 @@ caffeinate -i python main.py
    ```
    _特点：支持断点续传，自动跳过已下载笔记，不依赖 API 分页_
 
+### 🖼️ OCR 图片文字识别
+
+爬虫支持对图集中的文字模板图进行 OCR 识别（需安装 PaddleOCR）：
+
+```bash
+pip install paddleocr
+```
+
+- **智能过滤**：自动区分文字模板图和普通照片，仅对文字图执行 OCR
+- **超时保护**：OCR 以独立子进程运行，60 秒超时后自动终止，避免阻塞爬虫
+- OCR 结果保存在 `detail.txt` 的"图片文字"字段中
+
+### 📡 远程管理（SSH）
+
+出门在外时可通过 SSH 远程管理爬虫，无需图形界面：
+
+1. **开启远程登录**（仅需一次）：
+
+   ```bash
+   sudo systemsetup -setremotelogin on
+   ```
+
+2. **从手机/其他电脑 SSH 连入**：
+
+   ```bash
+   ssh 用户名@你的IP地址
+   ```
+
+   > 💡 推荐手机 SSH 客户端：Termius（iOS/Android）
+
+3. **使用管理脚本**：
+
+   ```bash
+   cd ~/Investment/Spider_XHS
+
+   ./manage_scraper.sh status          # 查看爬虫状态
+   ./manage_scraper.sh logs            # 查看最近日志
+   ./manage_scraper.sh progress        # 查看爬取进度
+   ./manage_scraper.sh stop            # 停止爬虫
+   ./manage_scraper.sh restart         # 重启爬虫
+   ./manage_scraper.sh update_cookie 'cookie字符串'  # 更新Cookie并重启
+   ```
+
+   > ⚠️ **外网访问**：局域网外需在路由器设置端口转发（端口22），或使用 [Tailscale](https://tailscale.com) 内网穿透
+
 ### 🗝️注意事项
 
 - main.py中的代码是爬虫的入口，可以根据自己的需求进行修改
