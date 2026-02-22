@@ -13,8 +13,8 @@ class Data_Spider():
     def __init__(self):
         self.xhs_apis = XHS_Apis()
         self.stop_id_set = set() # Initialize stop_id_set
-        self.throttle_min = 300
-        self.throttle_max = 310
+        self.throttle_min = 220
+        self.throttle_max = 240
 
     def spider_note(self, note_url: str, cookies_str: str, proxies=None):
         """
