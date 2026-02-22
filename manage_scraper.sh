@@ -5,7 +5,7 @@
 #   ./manage_scraper.sh update_cookie "COOKIE_STRING"  - Update cookie and restart
 #   ./manage_scraper.sh restart      - Restart scraper with current cookie
 #   ./manage_scraper.sh stop         - Stop scraper
-#   ./manage_scraper.sh logs         - Show last 30 lines of log
+#   ./manage_scraper.sh logs         - Show last 60 lines of log
 #   ./manage_scraper.sh progress     - Show scraping progress summary
 
 cd /Users/jxiaox/Investment/Spider_XHS
@@ -23,8 +23,8 @@ case "$1" in
     ;;
 
   logs)
-    echo "=== Last 30 Log Lines ==="
-    tail -30 "$LOG_FILE"
+    echo "=== Last 60 Log Lines ==="
+    tail -60 "$LOG_FILE"
     ;;
 
   progress)
@@ -105,7 +105,7 @@ case "$1" in
     echo ""
     echo "Commands:"
     echo "  status         - Check scraper status and recent logs"
-    echo "  logs           - Show last 30 lines of log"
+    echo "  logs           - Show last 60 lines of log"
     echo "  progress       - Show progress summary"
     echo "  stop           - Stop scraper"
     echo "  restart        - Restart scraper"
