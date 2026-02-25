@@ -1,0 +1,20 @@
+笔记id: 69734e4e00000000220324ed
+笔记url: https://www.xiaohongshu.com/explore/69734e4e00000000220324ed?xsec_token=ABmQ9OEx9HZYYvpyLc6yVXurbYuKyvuW4woUK2lz9CASQ=
+笔记类型: 图集
+用户id: 5b6150c56b58b741e26b8c7f
+用户主页url: https://www.xiaohongshu.com/user/profile/5b6150c56b58b741e26b8c7f
+昵称: 还是叫吴富贵吧
+头像url: https://sns-avatar-qc.xhscdn.com/avatar/1040g2jo31g9vkplp2s6g4a7r1e8cb33vdvgmpr0
+标题: 过程
+描述: 图1-图3
+#过程[话题]#
+点赞数量: 1724
+收藏数量: 292
+评论数量: 308
+分享数量: 30
+视频封面url: None
+视频地址url: None
+图片地址url列表: ['http://sns-webpic-qc.xhscdn.com/202601251915/72b273f4cb9bc4d4de5531006b4a72ad/1040g2sg31rm7jnum32jg4a7r1e8cb33voqq7tlo!nd_dft_wgth_webp_3', 'http://sns-webpic-qc.xhscdn.com/202601251915/c1434350855af92fb78d77ad0dc70733/1040g2sg31rm7jnum32g04a7r1e8cb33v62pqa90!nd_dft_wgth_webp_3', 'http://sns-webpic-qc.xhscdn.com/202601251915/0c8d8f8463bdbe784ad4c3c3e12e9918/1040g2sg31rm7jnum32h04a7r1e8cb33voa69c18!nd_dft_wgth_webp_3']
+标签: ['过程']
+上传时间: 2026-01-23 18:32:46
+ip归属地: 上海
