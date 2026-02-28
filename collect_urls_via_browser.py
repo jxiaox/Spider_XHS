@@ -137,7 +137,7 @@ async def collect_urls(user_url, output_file, max_scrolls=1000):
 
 if __name__ == "__main__":
     user_url = "https://www.xiaohongshu.com/user/profile/5b6150c56b58b741e26b8c7f"
-    output_file = "/Users/jxiaox/Investment/Spider_XHS/collected_urls.txt"
+    output_file = "/Users/jxiaox/github.com/Spider_XHS/collected_urls.txt"
     
     # Clear file first to start fresh
     if os.path.exists(output_file):

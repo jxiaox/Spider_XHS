@@ -144,7 +144,7 @@ pip install paddleocr
 3. **使用管理脚本**：
 
    ```bash
-   cd ~/Investment/Spider_XHS
+   cd ~/github.com/Spider_XHS
 
    ./manage_scraper.sh status          # 查看爬虫状态
    ./manage_scraper.sh logs            # 查看最近日志
