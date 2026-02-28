@@ -4,7 +4,7 @@ import requests
 import re
 from dotenv import load_dotenv
 
-sys.path.append("/Users/jxiaox/Investment/Spider_XHS")
+sys.path.append("/Users/jxiaox/github.com/Spider_XHS")
 from xhs_utils.xhs_util import generate_request_params
 
 load_dotenv()

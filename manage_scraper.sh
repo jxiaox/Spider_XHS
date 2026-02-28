@@ -8,7 +8,7 @@
 #   ./manage_scraper.sh logs         - Show last 60 lines of log
 #   ./manage_scraper.sh progress     - Show scraping progress summary
 
-cd /Users/jxiaox/Investment/Spider_XHS
+cd /Users/jxiaox/github.com/Spider_XHS
 VENV_PYTHON="./venv/bin/python3"
 ENV_FILE=".env"
 LOG_FILE="scraper.log"

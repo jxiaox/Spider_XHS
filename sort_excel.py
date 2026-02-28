@@ -2,7 +2,7 @@
 import openpyxl
 import os
 
-file_path = '/Users/jxiaox/Investment/Spider_XHS/datas/excel_datas/5b6150c56b58b741e26b8c7f.xlsx'
+file_path = '/Users/jxiaox/github.com/Spider_XHS/datas/excel_datas/5b6150c56b58b741e26b8c7f.xlsx'
 
 def sort_excel():
     if not os.path.exists(file_path):

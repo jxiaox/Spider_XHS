@@ -16,7 +16,7 @@ def is_text_image_new(img_path):
     dominant_pct = top / total * 100
     return dominant_pct >= 50.0 and num_colors <= 25, dominant_pct, num_colors
 
-base = '/Users/jxiaox/Investment/Spider_XHS/datas/media_datas/还是叫吴富贵吧_5b6150c56b58b741e26b8c7f'
+base = '/Users/jxiaox/github.com/Spider_XHS/datas/media_datas/还是叫吴富贵吧_5b6150c56b58b741e26b8c7f'
 # Find sample images
 samples = glob.glob(os.path.join(base, '*/image_0.jpg'))[:20]
 for p in sorted(samples):

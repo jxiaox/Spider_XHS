@@ -29,5 +29,5 @@ def scrape_from_file(url_file, batch_size=1000):
         data_spider.spider_some_note(batch, cookies_str, base_path, 'all', excel_name)
 
 if __name__ == "__main__":
-    url_file = "/Users/jxiaox/Investment/Spider_XHS/collected_urls.txt"
+    url_file = "/Users/jxiaox/github.com/Spider_XHS/collected_urls.txt"
     scrape_from_file(url_file)

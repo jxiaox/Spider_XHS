@@ -2,7 +2,7 @@
 import pandas as pd
 import os
 
-excel_path = "/Users/jxiaox/Investment/Spider_XHS/datas/excel_datas/5b6150c56b58b741e26b8c7f.xlsx"
+excel_path = "/Users/jxiaox/github.com/Spider_XHS/datas/excel_datas/5b6150c56b58b741e26b8c7f.xlsx"
 
 if not os.path.exists(excel_path):
     print(f"File not found: {excel_path}")
