@@ -1,17 +1,28 @@
 #!/bin/bash
-# Scraper management script for remote SSH access
-# Usage:
-#   ./manage_scraper.sh status       - Check scraper status and recent logs
-#   ./manage_scraper.sh update_cookie "COOKIE_STRING"  - Update cookie and restart
-#   ./manage_scraper.sh restart      - Restart scraper with current cookie
-#   ./manage_scraper.sh stop         - Stop scraper
-#   ./manage_scraper.sh logs         - Show last 60 lines of log
-#   ./manage_scraper.sh progress     - Show scraping progress summary
 
-cd /Users/jxiaox/github.com/Spider_XHS
+cd "$(cd "$(dirname "$0")" && pwd)"
 VENV_PYTHON="./venv/bin/python3"
 ENV_FILE=".env"
 LOG_FILE="scraper.log"
+
+ensure_venv() {
+  if [ ! -x "$VENV_PYTHON" ]; then
+    if command -v python3 >/dev/null 2>&1; then
+      python3 -m venv ./venv || /usr/bin/python3 -m venv ./venv
+    elif command -v python >/dev/null 2>&1; then
+      python -m venv ./venv
+    fi
+  fi
+  if [ -x "$VENV_PYTHON" ]; then
+    "$VENV_PYTHON" -m pip install --upgrade pip >/dev/null 2>&1
+    if [ -f "requirements.txt" ]; then
+      "$VENV_PYTHON" -m pip install -r requirements.txt
+    fi
+  else
+    echo "Python environment not available"
+    exit 1
+  fi
+}
 
 case "$1" in
   status)
@@ -51,14 +62,13 @@ case "$1" in
 
   restart)
     echo "Restarting scraper..."
-    # Stop first
     pkill -f "scrape_from_local.py" 2>/dev/null
     pkill -f "ocr_subprocess.py" 2>/dev/null
     sleep 2
     pkill -9 -f "scrape_from_local.py" 2>/dev/null
     pkill -9 -f "ocr_subprocess.py" 2>/dev/null
     sleep 1
-    # Start
+    ensure_venv
     nohup caffeinate -i $VENV_PYTHON scrape_from_local.py >> "$LOG_FILE" 2>&1 &
     echo "Scraper restarted (PID: $!)"
     sleep 3
@@ -84,7 +94,6 @@ case "$1" in
     mv "${ENV_FILE}.tmp" "$ENV_FILE"
     echo "Cookie updated."
     echo ""
-    # Auto restart
     echo "Restarting scraper with new cookie..."
     pkill -f "scrape_from_local.py" 2>/dev/null
     pkill -f "ocr_subprocess.py" 2>/dev/null
@@ -92,6 +101,7 @@ case "$1" in
     pkill -9 -f "scrape_from_local.py" 2>/dev/null
     pkill -9 -f "ocr_subprocess.py" 2>/dev/null
     sleep 1
+    ensure_venv
     nohup caffeinate -i $VENV_PYTHON scrape_from_local.py >> "$LOG_FILE" 2>&1 &
     echo "Scraper restarted (PID: $!)"
     sleep 3
