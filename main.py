@@ -82,7 +82,20 @@ class Data_Spider():
         scraped_ids = set()
         if os.path.exists(file_path):
              scraped_ids = get_scraped_note_ids(file_path)
-             logger.info(f"Found {len(scraped_ids)} already scraped notes. These will be skipped.")
+             
+        for txt_file in ["scraped_urls.txt", "deleted_urls.txt"]:
+            txt_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), txt_file)
+            if os.path.exists(txt_path):
+                with open(txt_path, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        line = line.strip()
+                        if '/explore/' in line:
+                            try:
+                                nid = line.split('/explore/')[1].split('?')[0]
+                                scraped_ids.add(nid)
+                            except: pass
+
+        logger.info(f"Found {len(scraped_ids)} already scraped or deleted notes to skip.")
 
         total_notes = len(notes)
         for index, note_url in enumerate(notes, 1):
@@ -200,17 +213,18 @@ class Data_Spider():
         if os.path.exists(excel_path):
              scraped_ids = get_scraped_note_ids(excel_path)
 
-        # Check scraped_urls.txt
-        scraped_txt_path = os.path.abspath(os.path.join(base_path['excel'], "../../scraped_urls.txt")) 
-        if os.path.exists(scraped_txt_path):
-            with open(scraped_txt_path, 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip()
-                    if '/explore/' in line:
-                         try:
-                            nid = line.split('/explore/')[1].split('?')[0]
-                            scraped_ids.add(nid)
-                         except: pass
+        # Check scraped_urls.txt and deleted_urls.txt
+        for txt_file in ["scraped_urls.txt", "deleted_urls.txt"]:
+            txt_path = os.path.abspath(os.path.join(base_path['excel'], f"../../{txt_file}")) 
+            if os.path.exists(txt_path):
+                with open(txt_path, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        line = line.strip()
+                        if '/explore/' in line:
+                             try:
+                                nid = line.split('/explore/')[1].split('?')[0]
+                                scraped_ids.add(nid)
+                             except: pass
         
         logger.info(f"Total Skippable Notes: {len(scraped_ids)}")
 
@@ -268,20 +282,21 @@ class Data_Spider():
             if os.path.exists(file_path):
                  scraped_ids = get_scraped_note_ids(file_path)
 
-            # Also load from scraped_urls.txt if exists (for double safety)
-            scraped_txt_path = os.path.abspath(os.path.join(base_path['excel'], "../../scraped_urls.txt")) 
-            if os.path.exists(scraped_txt_path):
-                with open(scraped_txt_path, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line: continue
-                        # Format: https://www.xiaohongshu.com/explore/<note_id>?...
-                        try:
-                            if '/explore/' in line:
-                                nid = line.split('/explore/')[1].split('?')[0]
-                                scraped_ids.add(nid)
-                        except:
-                            pass
+            # Also load from scraped_urls.txt and deleted_urls.txt if exists (for double safety)
+            for txt_file in ["scraped_urls.txt", "deleted_urls.txt"]:
+                txt_path = os.path.abspath(os.path.join(base_path['excel'], f"../../{txt_file}")) 
+                if os.path.exists(txt_path):
+                    with open(txt_path, 'r', encoding='utf-8') as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line: continue
+                            # Format: https://www.xiaohongshu.com/explore/<note_id>?...
+                            try:
+                                if '/explore/' in line:
+                                    nid = line.split('/explore/')[1].split('?')[0]
+                                    scraped_ids.add(nid)
+                            except:
+                                pass
             
             logger.info(f"Total Skippable Notes (Excel + Txt): {len(scraped_ids)}")
 
@@ -382,6 +397,7 @@ if __name__ == '__main__':
     # 1 爬取列表的所有笔记信息 笔记链接 如下所示 注意此url会过期！
     notes = [
         r'https://www.xiaohongshu.com/explore/683fe17f0000000023017c6a?xsec_token=ABBr_cMzallQeLyKSRdPk9fwzA0torkbT_ubuQP1ayvKA=&xsec_source=pc_user',
+        r'https://www.xiaohongshu.com/explore/6846cbe700000000030393c0?xsec_token=ABsh2hg0nLYfcnruza3Gx_BPJQWqc-k7ys6Fs43N-x638=&xsec_source=pc_user' # Should be skipped
     ]
     data_spider.spider_some_note(notes, cookies_str, base_path, 'all', 'test')
 
