@@ -53,6 +53,23 @@ async def collect_urls(user_url, output_file, max_scrolls=1000):
                 print("Timeout waiting for login. Proceeding with current state...")
 
         collected_ids = set()
+        
+        # Load existing IDs to avoid duplicates
+        files_to_load = [output_file, "scraped_urls.txt", "deleted_urls.txt"]
+        for f_name in files_to_load:
+            # handle absolute or relative paths
+            f_path = f_name if os.path.isabs(f_name) else os.path.join(os.path.dirname(os.path.abspath(__file__)), f_name)
+            if os.path.exists(f_path):
+                print(f"Loading existing IDs from {os.path.basename(f_path)}...")
+                with open(f_path, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        if '/explore/' in line:
+                            try:
+                                nid = line.split('/explore/')[1].split('?')[0]
+                                collected_ids.add(nid)
+                            except: pass
+        
+        print(f"Loaded {len(collected_ids)} unique IDs to skip.")
 
         # Step 0: Try to extract tokens from INITIAL_STATE for the first page
         print("Extracting tokens from INITIAL_STATE...")
@@ -139,9 +156,9 @@ if __name__ == "__main__":
     user_url = "https://www.xiaohongshu.com/user/profile/5b6150c56b58b741e26b8c7f"
     output_file = "/Users/jxiaox/github.com/Spider_XHS/collected_urls.txt"
     
-    # Clear file first to start fresh
-    if os.path.exists(output_file):
-        os.remove(output_file)
+    # Do NOT clear file, we want incremental updates
+    # if os.path.exists(output_file):
+    #     os.remove(output_file)
         
     print(f"Starting collection. Each scroll will append new URLs to {output_file}")
     asyncio.run(collect_urls(user_url, output_file, max_scrolls=2000))
